@@ -42,14 +42,14 @@ jobs:
       REPO_OWNER: TheWildJames
       REPO_NAME: Sultan_KernelSU_SUSFS
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      RELEASE_NAME: "Sultan Kernels With KernelSU Next & SUSFS v2.1.0"
+      RELEASE_NAME: "Sultan Kernels With SukiSU-Ultra & SUSFS v2.1.0"
       RELEASE_NOTES: |
-        This release contains KernelSU Next and SUSFS v2.1.0
+        This release contains SukiSU-Ultra (susfs_new) with integrated SUSFS v2.1.0
         
         ### 📦 Variants Included:
         * **stock**: The pure, unmodified base Sultan kernel. Built straight from source with no extra patches or additions.
         * **wksu**: Includes Wild KernelSU (WKSU) integrated into the kernel. No other modifications.
-        * **wksu-susfs**: The ultimate package. Includes KernelSU Next, SUSFS v2.1.0, and extra custom configurations (Mountify support, networking tweaks, BBR TCP congestion, and IPSet support).
+        * **wksu-susfs**: The ultimate package. Includes SukiSU-Ultra (branch: susfs_new) with integrated SUSFS v2.1.0, and extra custom configurations (Mountify support, networking tweaks, BBR TCP congestion, and IPSet support).
         
         ⚠️ **COMPATIBILITY NOTICE** ⚠️
         Please ensure compatibility!
@@ -57,15 +57,15 @@ jobs:
         **Sultan Commits Used:**
         -> https://github.com/kerneltoast/android_kernel_google_tensynos/commit/TENSYNOS_HASH
         
-        Module: 
-        -> https://github.com/sidex15/ksu_module_susfs
+        Root Solution:
+        -> https://github.com/SukiSU-Ultra/SukiSU_Ultra/tree/susfs_new
         
-        Managers:
-        -> https://github.com/KernelSU-Next/KernelSU-Next
+        Manager:
+        -> https://github.com/SukiSU-Ultra/SukiSU_Manager
         
         Features:
-        [+] KernelSU Next
-        [+] SUSFS v2.1.0
+        [+] SukiSU-Ultra (susfs_new)
+        [+] SUSFS v2.1.0 (integrated)
         [+] Mountify Support
         [+] BBR TCP Congestion Control
         [+] IPSet Support

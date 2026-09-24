@@ -43,17 +43,17 @@ To get boot.img format:
 
 # Features
 
-- **KernelSU**: KernelSU is a root solution for Android GKI devices, it works in kernel mode and grants root permission to userspace applications directly in kernel space.
-- **SUSFS**: An addon root hiding kernel patches and userspace module for KernelSU.
+- **SukiSU-Ultra**: A KernelSU fork providing a root solution for Android GKI devices; it works in kernel mode and grants root permission to userspace applications directly in kernel space. This project uses the `susfs_new` branch, which integrates SUSFS support directly into the root solution.
+- **SUSFS**: Root hiding kernel patches, now integrated via SukiSU-Ultra (`susfs_new`) instead of standalone susfs4ksu + KernelSU.
 
 ---
 
 # Credits
 
 - **KernelSU**: Developed by [tiann](https://github.com/tiann/KernelSU).
-- **KernelSU-Next**: Developed by [rifsxd](https://github.com/KernelSU-Next/KernelSU-Next).
-- **SUSFS**: Developed by [simonpunk](https://gitlab.com/simonpunk/susfs4ksu.git).
-- **SUSFS Module**: Developed by [sidex15](https://github.com/sidex15).
+- **SukiSU-Ultra**: Developed by [SukiSU-Ultra](https://github.com/SukiSU-Ultra) (branch: [susfs_new](https://github.com/SukiSU-Ultra/SukiSU_Ultra/tree/susfs_new)).
+- **SUSFS**: Originally developed by [simonpunk](https://gitlab.com/simonpunk/susfs4ksu.git); now maintained as part of SukiSU-Ultra.
+- **SUSFS Module**: Developed by [the-susfs-team](https://github.com/the-susfs-team).
 - **Sultan Kernels**: Developed by [kerneltoast](https://github.com/kerneltoast).
 
 Special thanks to the open-source community for their contributions!

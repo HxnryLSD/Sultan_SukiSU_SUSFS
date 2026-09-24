@@ -69,48 +69,45 @@ jobs:
           git clone https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
           git clone https://github.com/TheWildJames/kernel_patches.git
           git clone https://github.com/TheWildJames/android_kernel_google_tensynos --depth=1
-          SUSFS_BRANCH="gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}"
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
+          # SUSFS is integrated into SukiSU-Ultra (branch: susfs_new) - no separate susfs4ksu repo needed
+          git clone https://github.com/SukiSU-Ultra/SukiSU_Ultra.git -b susfs_new
 
-      - name: Add KernelSU
+      - name: Add SukiSU-Ultra
         if: contains(matrix.features, 'ksun')
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          echo "Adding KernelSU..."
-          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
+          echo "Adding SukiSU-Ultra (susfs_new)..."
+          # SukiSU-Ultra setup.sh on branch susfs_new integrates KernelSU + SUSFS support
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_Ultra/susfs_new/kernel/setup.sh" | bash -s susfs_new
 
       - name: Apply SUSFS Patches
         if: contains(matrix.features, 'susfs')
         run: |
-          # Apply pershoot susfs4ksu coexistence patches
-          cd susfs4ksu
-          patch -p1 < "${{ github.workspace }}/kernel_patches/pershoot/susfs4ksu/0001-pershoot-Allow-core-to-be-built-with-no-features.patch"
-          patch -p1 < "${{ github.workspace }}/kernel_patches/pershoot/susfs4ksu/0002-pershoot-Implement-SuSFS-and-Toolkit-coexistence.patch"
-          cd ..
-
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          SUSFS_VERSION="2.0.0"
+          # SUSFS kernel patches ship inside the SukiSU-Ultra susfs_new branch tree
+          SUSFS_PATCH_DIR="../SukiSU_Ultra"
 
-          echo "Applying SUSFS patches..."
+          echo "Applying SUSFS patches from SukiSU-Ultra ($SUSFS_PATCH_DIR)..."
 
           # Copy SUSFS patches
-          cp ../susfs4ksu/kernel_patches/fs/* ./fs/
-          cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
+          cp $SUSFS_PATCH_DIR/kernel_patches/fs/* ./fs/
+          cp $SUSFS_PATCH_DIR/kernel_patches/include/linux/* ./include/linux/
 
           perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
 
           # Apply SUSFS patch
-          patch -p1 < ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          patch -p1 < $SUSFS_PATCH_DIR/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
 
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
-          
-          patch -p1 < ../kernel_patches/sultan/sys.c_fix.patch
 
-      - name: Configure KernelSU
+          # kernel/sys.c now ships with SukiSU-Ultra (susfs_new) hooks already applied;
+          # legacy sys.c_fix.patch is obsolete and no longer applied.
+
+      - name: Configure SukiSU-Ultra
         if: contains(matrix.features, 'ksun')
         run: |
           cd "$CONFIG"
