@@ -58,6 +58,9 @@ jobs:
         [+] BBR TCP Congestion Control
         [+] IPSet Support
 
+    outputs:
+      new_tag: ${{ steps.generate-tag.outputs.new_tag }}
+
     steps:
       # Performance: this job only needs the tag list, release notes and the
       # built artifacts — not the kernel sources. Skipping the history fetch
@@ -69,6 +72,7 @@ jobs:
 
       # Get the Latest Tag from GitHub
       - name: Generate and Create New Tag
+        id: generate-tag
         run: |
             # Fetch all tags and pick the highest one using version sort.
             # The /tags API does not guarantee "latest first", so sorting
@@ -99,7 +103,10 @@ jobs:
             # Output the new tag to be used
             echo "New tag: $NEW_TAG"
 
-            # Set the new tag as an environment variable to be used in later steps
+            # Expose the tag as a step output (the reliable way to reference it
+            # later via ${{ needs.trigger-release.outputs.new_tag }}) and also
+            # set it as an environment variable for subsequent steps in this job.
+            echo "new_tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
             echo "NEW_TAG=${NEW_TAG}" >> $GITHUB_ENV
 
             # Create the tag in the repository
@@ -145,19 +152,17 @@ jobs:
               # Append the release tag version to the filename
               cp "$file" "./release-assets/${name}-${NEW_TAG}.${ext}"
           done
-        env:
-          NEW_TAG: ${{ env.NEW_TAG }}
 
       # Create GitHub Release and upload assets
       # (actions/create-release@v1 is archived/unmaintained; use softprops/action-gh-release)
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.NEW_TAG }}  # Use the generated tag for the release
+          tag_name: ${{ needs.trigger-release.outputs.new_tag }}  # Use the generated tag for the release
           name: ${{ env.RELEASE_NAME }}  # Pass the RELEASE_NAME to the action
           body: ${{ env.RELEASE_NOTES }}  # Pass the RELEASE_NOTES to the action
           files: ./release-assets/*
-          fail_on_missing_files: true
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
