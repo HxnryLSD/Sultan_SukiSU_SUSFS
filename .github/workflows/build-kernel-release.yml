@@ -6,6 +6,12 @@ permissions:
   
 on:
   workflow_dispatch:
+
+# Never run two release builds at once: they would race on tag creation
+# and artifact names.
+concurrency:
+  group: kernel-release
+  cancel-in-progress: false
         
 jobs:
   build-kernel-gs201:
@@ -15,47 +21,29 @@ jobs:
       codename: "gs201"
       android_version: "android14"
       kernel_version: "6.1"
-      
-  build-kernel-zuma:
-    uses: ./.github/workflows/sultan.yml
-    secrets: inherit
-    with:
-      codename: "zuma"
-      android_version: "android14"
-      kernel_version: "6.1"
-
-  build-kernel-zumapro:
-    uses: ./.github/workflows/sultan.yml
-    secrets: inherit
-    with:
-      codename: "zumapro"
-      android_version: "android14"
-      kernel_version: "6.1"
 
   trigger-release:
     runs-on: ubuntu-latest
     needs:
         - build-kernel-gs201
-        - build-kernel-zuma
-        - build-kernel-zumapro
     env:
-      REPO_OWNER: TheWildJames
-      REPO_NAME: Sultan_KernelSU_SUSFS
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Keep in sync with env.SUSFS_VERSION in .github/workflows/sultan.yml
+      SUSFS_VERSION: "2.1.0"
       RELEASE_NAME: "Sultan Kernels With SukiSU-Ultra & SUSFS v2.1.0"
       RELEASE_NOTES: |
-        This release contains SukiSU-Ultra (susfs_new) with integrated SUSFS v2.1.0
+        This release contains SukiSU-Ultra (susfs_new) with integrated SUSFS v${SUSFS_VERSION}
         
         ### 📦 Variants Included:
         * **stock**: The pure, unmodified base Sultan kernel. Built straight from source with no extra patches or additions.
         * **wksu**: Includes Wild KernelSU (WKSU) integrated into the kernel. No other modifications.
-        * **wksu-susfs**: The ultimate package. Includes SukiSU-Ultra (branch: susfs_new) with integrated SUSFS v2.1.0, and extra custom configurations (Mountify support, networking tweaks, BBR TCP congestion, and IPSet support).
+        * **wksu-susfs**: The ultimate package. Includes SukiSU-Ultra (branch: susfs_new) with integrated SUSFS v${SUSFS_VERSION}, and extra custom configurations (Mountify support, networking tweaks, BBR TCP congestion, and IPSet support).
         
         ⚠️ **COMPATIBILITY NOTICE** ⚠️
         Please ensure compatibility!
         
         **Sultan Commits Used:**
-        -> https://github.com/kerneltoast/android_kernel_google_tensynos/commit/TENSYNOS_HASH
+        -> https://github.com/TheWildJames/android_kernel_google_tensynos/commit/TENSYNOS_HASH
         
         Root Solution:
         -> https://github.com/SukiSU-Ultra/SukiSU_Ultra/tree/susfs_new
@@ -65,7 +53,7 @@ jobs:
         
         Features:
         [+] SukiSU-Ultra (susfs_new)
-        [+] SUSFS v2.1.0 (integrated)
+        [+] SUSFS v${SUSFS_VERSION} (integrated)
         [+] Mountify Support
         [+] BBR TCP Congestion Control
         [+] IPSet Support
@@ -73,15 +61,15 @@ jobs:
     steps:
       # Checkout the code
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       # Get the Latest Tag from GitHub
       - name: Generate and Create New Tag
         run: |
             # Fetch the latest tag from GitHub (this is the latest tag based on the GitHub API)
-            LATEST_TAG=$(gh api repos/$REPO_OWNER/$REPO_NAME/tags --jq '.[0].name')
+            LATEST_TAG=$(gh api "repos/${{ github.repository }}/tags" --jq '.[0].name')
             if [ -z "$LATEST_TAG" ]; then
-              LATEST_TAG="v2.0.0-r0"  # Default to v1.5.7-0 if no tag exists
+              LATEST_TAG="v2.0.0-r0"  # Default starting tag if none exists yet
             fi
             
             # Increment the suffix (e.g., v1.5.7-0 becomes v1.5.7-1)
@@ -105,7 +93,7 @@ jobs:
 
       - name: Fetch and Inject Sultan Commits
         run: |
-          TENSYNOS_COMMIT=$(git ls-remote https://github.com/kerneltoast/android_kernel_google_tensynos HEAD | awk '{print $1}')
+          TENSYNOS_COMMIT=$(git ls-remote https://github.com/TheWildJames/android_kernel_google_tensynos HEAD | awk '{print $1}')
           
           # Replace placeholders in RELEASE_NOTES
           UPDATED_NOTES="${RELEASE_NOTES//TENSYNOS_HASH/$TENSYNOS_COMMIT}"
@@ -115,18 +103,13 @@ jobs:
           echo "$UPDATED_NOTES" >> $GITHUB_ENV
           echo "$EOF" >> $GITHUB_ENV
 
-      # Create GitHub Release and upload files if make_release is true
-      - name: Create GitHub Release
-        uses: actions/create-release@v1
-        with:
-          tag_name: ${{ env.NEW_TAG }}  # Use the generated tag for the release
-          release_name: ${{ env.RELEASE_NAME }}  # Pass the RELEASE_NAME to the action
-          body: ${{ env.RELEASE_NOTES }}  # Pass the RELEASE_NOTES to the action
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Release Assets Dynamically
+      # Rename artifacts to include the release tag before uploading
+      - name: Prepare Release Assets
+        shell: bash
         run: |
+          set -euo pipefail
+          mkdir -p ./release-assets
+          shopt -s nullglob
           # Loop through all files in the downloaded-artifacts directory
           for file in ./downloaded-artifacts/kernel-*/*; do
               # Skip directories
@@ -134,23 +117,28 @@ jobs:
                   continue
               fi
 
-              # Extract directory, filename, and extension
-              dir=$(dirname "$file")
               filename=$(basename "$file")
               name="${filename%.*}"
               ext="${filename##*.}"
-              
-              # Append the release tag version to the filename
-              new_filepath="$dir/${name}-${{ env.NEW_TAG }}.${ext}"
-              mv "$file" "$new_filepath"
 
-              # Upload the renamed file to the GitHub release
-              echo "Uploading $new_filepath..."
-              gh release upload ${{ env.NEW_TAG }} "$new_filepath"
+              # Append the release tag version to the filename
+              cp "$file" "./release-assets/${name}-${NEW_TAG}.${ext}"
           done
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_TAG: ${{ env.NEW_TAG }}
+
+      # Create GitHub Release and upload assets
+      # (actions/create-release@v1 is archived/unmaintained; use softprops/action-gh-release)
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.NEW_TAG }}  # Use the generated tag for the release
+          name: ${{ env.RELEASE_NAME }}  # Pass the RELEASE_NAME to the action
+          body: ${{ env.RELEASE_NOTES }}  # Pass the RELEASE_NOTES to the action
+          files: ./release-assets/*
+          fail_on_missing_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Display Files Uploaded
       - name: Display Files Uploaded

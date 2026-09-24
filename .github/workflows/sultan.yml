@@ -3,6 +3,9 @@ permissions:
   contents: write # Allow writing to repository contents (for pushing tags)
   actions: write # Allows triggering actions
 
+env:
+  SUSFS_VERSION: "2.1.0"
+
 on:
   workflow_call: # This allows this workflow to be called from another workflow
     inputs:
@@ -22,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        features: ["stock", "ksun-susfs"]
+        features: ["stock", "wksu", "wksu-susfs"]
     steps:
       #- name: Maximize Build Space
       #  uses: AdityaGarg8/remove-unwanted-software@v5
@@ -37,14 +40,20 @@ jobs:
       #    remove-cached-tools: 'false'   # Avoid unless confirmed safe
       #    verbose: 'true'                # Enable detailed logging
 
+      - name: Cache GCC 14.2.0 toolchain
+        id: gcc-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/gcc-14.2.0-nolibc
+          key: gcc-14.2.0-nolibc-aarch64-linux
+
       - name: Download and extract GCC 14.2.0 toolchain
+        if: steps.gcc-cache.outputs.cache-hit != 'true'
         run: |
           echo "Downloading GCC 14.2.0 cross-compiler toolchain..."
-          wget https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/14.2.0/x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz
-          echo "Extracting .gz file..."
-          gunzip x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.gz
-          echo "Extracting .tar file..."
-          tar -xf x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar
+          wget -q https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/14.2.0/x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.xz
+          echo "Extracting toolchain into workspace..."
+          tar -xf x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.xz -C "$GITHUB_WORKSPACE"
           echo "GCC 14.2.0 toolchain extracted successfully"
 
       - name: Set CONFIG Environment Variable
@@ -73,7 +82,7 @@ jobs:
           git clone https://github.com/SukiSU-Ultra/SukiSU_Ultra.git -b susfs_new
 
       - name: Add SukiSU-Ultra
-        if: contains(matrix.features, 'ksun')
+        if: contains(matrix.features, 'wksu')
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
@@ -84,23 +93,34 @@ jobs:
 
       - name: Apply SUSFS Patches
         if: contains(matrix.features, 'susfs')
+        shell: bash
         run: |
+          set -euo pipefail
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
           # SUSFS kernel patches ship inside the SukiSU-Ultra susfs_new branch tree
           SUSFS_PATCH_DIR="../SukiSU_Ultra"
 
-          echo "Applying SUSFS patches from SukiSU-Ultra ($SUSFS_PATCH_DIR)..."
+          echo "Applying SUSFS v${SUSFS_VERSION} patches from SukiSU-Ultra ($SUSFS_PATCH_DIR)..."
 
           # Copy SUSFS patches
           cp $SUSFS_PATCH_DIR/kernel_patches/fs/* ./fs/
           cp $SUSFS_PATCH_DIR/kernel_patches/include/linux/* ./include/linux/
 
+          # libperfmgr redirect interacts badly with the raw patch context;
+          # temporarily normalize fs/open.c, apply the patch, then restore it.
           perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
 
-          # Apply SUSFS patch
-          patch -p1 < $SUSFS_PATCH_DIR/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
+          # Apply SUSFS patch. Do NOT swallow failures with "|| true": a failed
+          # patch leaves .rej files and produces a silently broken kernel.
+          patch -p1 --no-backup-if-mismatch < "$SUSFS_PATCH_DIR/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch"
+
+          # Verify the patch actually landed before continuing
+          if find . -name '*.rej' -print -quit | grep -q .; then
+            echo "::error::SUSFS patch produced .rej files; aborting build."
+            exit 1
+          fi
 
           perl -0pi -e 's/if \(IS_ERR\(f\)\) \{/if (IS_ERR(f) && !libperfmgr_redirect(&f, dfd, tmp, &op, how)) {/g' fs/open.c
 
@@ -108,7 +128,7 @@ jobs:
           # legacy sys.c_fix.patch is obsolete and no longer applied.
 
       - name: Configure SukiSU-Ultra
-        if: contains(matrix.features, 'ksun')
+        if: contains(matrix.features, 'wksu')
         run: |
           cd "$CONFIG"
           # KernelSU Configuration
@@ -123,7 +143,7 @@ jobs:
           fi
 
       - name: Configure Mountify Support
-        if: matrix.features == 'ksun-susfs'
+        if: matrix.features == 'wksu-susfs'
         run: |
           cd "$CONFIG"
           # Mountify Support
@@ -187,7 +207,7 @@ jobs:
           EOF
 
       - name: Run sed and perl Commands
-        if: matrix.features == 'ksun-susfs'
+        if: matrix.features == 'wksu-susfs'
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
@@ -227,8 +247,12 @@ jobs:
           echo "Navigating to AnyKernel3 directory..."
           cd ./AnyKernel3
 
+          # Derive the Android major version (e.g. "android14" -> "a14") from
+          # the workflow input instead of hardcoding it in the zip name.
+          ANDROID_MAJOR="a$(echo "${{ inputs.android_version }}" | sed 's/^android//')"
+
           # Zip the files in the AnyKernel3 directory with a new naming convention
-          ZIP_NAME="${{ inputs.codename }}-a16-${{ matrix.features }}-anykernel3.zip"
+          ZIP_NAME="${{ inputs.codename }}-${ANDROID_MAJOR}-${{ matrix.features }}-anykernel3.zip"
           echo "Creating zip file $ZIP_NAME..."
           zip -r "../$ZIP_NAME" ./*
 

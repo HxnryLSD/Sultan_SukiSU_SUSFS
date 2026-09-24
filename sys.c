@@ -6,6 +6,7 @@
  */
 
 #include <linux/export.h>
+#include <linux/jump_label.h>
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
 #include <linux/utsname.h>
@@ -672,7 +673,22 @@ long __sys_setresuid(uid_t ruid, uid_t euid, uid_t suid)
 	bool ruid_new, euid_new, suid_new;
 
 #ifdef CONFIG_KSU_SUSFS
-	(void)ksu_handle_setresuid(ruid, euid, suid);
+	/*
+	 * Let KernelSU/SUSFS potentially override the requested ids (e.g. to
+	 * spoof a root transition as unprivileged). Without consuming the
+	 * return value here, an override would be silently ignored.
+	 */
+	{
+		int susfs_ret = ksu_handle_setresuid(ruid, euid, suid);
+
+		if (susfs_ret == 1) {
+			ruid = current_cred()->uid;
+			euid = current_cred()->euid;
+			suid = current_cred()->suid;
+		} else if (susfs_ret < 0 && susfs_ret != -EINVAL) {
+			return susfs_ret;
+		}
+	}
 #endif
 
 	kruid = make_kuid(ns, ruid);
@@ -1306,34 +1322,37 @@ static int override_release(char __user *release, size_t len)
 }
 
 #ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
-extern bool susfs_is_uname_spoof_buffer_set;
+extern struct static_key_false susfs_is_uname_spoof_buffer_set;
 extern void susfs_spoof_uname(struct new_utsname *tmp);
+#endif /* CONFIG_KSU_SUSFS_SPOOF_UNAME */
+
+/*
+ * Copy the (possibly SUSFS-spoofed) uts name fields into a caller-owned
+ * new_utsname buffer while holding uts_sem for read.
+ */
+static void susfs_fill_spoofed_utsname(struct new_utsname *tmp)
+{
+	down_read(&uts_sem);
+	memcpy(tmp, utsname(), sizeof(*tmp));
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+	if (static_branch_likely(&susfs_is_uname_spoof_buffer_set))
+		susfs_spoof_uname(tmp);
 #endif
+	up_read(&uts_sem);
+}
 
 SYSCALL_DEFINE1(newuname, struct new_utsname __user *, name)
 {
 	struct new_utsname tmp;
-	struct task_struct *t;
-	bool is_gms = false;
 
-	down_read(&uts_sem);
-	memcpy(&tmp, utsname(), sizeof(tmp));
-#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
-	if (susfs_is_uname_spoof_buffer_set)
-		susfs_spoof_uname(&tmp);
-#endif
-	up_read(&uts_sem);
+	susfs_fill_spoofed_utsname(&tmp);
 
-	rcu_read_lock();
-	for_each_thread(current, t) {
-		if (thread_group_leader(t)) {
-			is_gms = !strcmp(t->comm, "id.gms.unstable");
-			break;
-		}
-	}
-	rcu_read_unlock();
-
-	if (is_gms)
+	/*
+	 * Only the thread group leader's comm matters here, so reading
+	 * current->group_leader directly is sufficient (and cheaper than
+	 * walking every thread under RCU).
+	 */
+	if (!strcmp(current->group_leader->comm, "id.gms.unstable"))
 		snprintf(tmp.release, sizeof(tmp.release), "%u.%u.%u",
 			 LINUX_VERSION_MAJOR, LINUX_VERSION_PATCHLEVEL,
 			 LINUX_VERSION_SUBLEVEL);
@@ -1359,9 +1378,20 @@ SYSCALL_DEFINE1(uname, struct old_utsname __user *, name)
 	if (!name)
 		return -EFAULT;
 
-	down_read(&uts_sem);
-	memcpy(&tmp, utsname(), sizeof(tmp));
-	up_read(&uts_sem);
+#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
+	if (static_branch_likely(&susfs_is_uname_spoof_buffer_set)) {
+		struct new_utsname uts;
+
+		susfs_fill_spoofed_utsname(&uts);
+		/* old_utsname is a truncated prefix layout of new_utsname */
+		memcpy(&tmp, &uts, sizeof(struct old_utsname));
+	} else
+#endif
+	{
+		down_read(&uts_sem);
+		memcpy(&tmp, utsname(), sizeof(tmp));
+		up_read(&uts_sem);
+	}
 	if (copy_to_user(name, &tmp, sizeof(tmp)))
 		return -EFAULT;
 
@@ -1381,13 +1411,20 @@ SYSCALL_DEFINE1(olduname, struct oldold_utsname __user *, name)
 
 	memset(&tmp, 0, sizeof(tmp));
 
-	down_read(&uts_sem);
-	memcpy(&tmp.sysname, &utsname()->sysname, __OLD_UTS_LEN);
-	memcpy(&tmp.nodename, &utsname()->nodename, __OLD_UTS_LEN);
-	memcpy(&tmp.release, &utsname()->release, __OLD_UTS_LEN);
-	memcpy(&tmp.version, &utsname()->version, __OLD_UTS_LEN);
-	memcpy(&tmp.machine, &utsname()->machine, __OLD_UTS_LEN);
-	up_read(&uts_sem);
+	/*
+	 * Stage through a new_utsname buffer so SUSFS spoofed values (which
+	 * are only applied to struct new_utsname) are reflected here too;
+	 * the field layouts share the same prefix ordering. Zeroing tmp above
+	 * keeps the shorter __OLD_UTS_LEN fields NUL-terminated when copying
+	 * from the wider __NEW_UTS_LEN staging fields.
+	 */
+	{
+		struct new_utsname uts;
+
+		susfs_fill_spoofed_utsname(&uts);
+		memcpy(&tmp, &uts, sizeof(struct oldold_utsname));
+	}
+
 	if (copy_to_user(name, &tmp, sizeof(tmp)))
 		return -EFAULT;
 

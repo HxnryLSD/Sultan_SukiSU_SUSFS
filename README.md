@@ -43,8 +43,9 @@ To get boot.img format:
 
 # Features
 
-- **SukiSU-Ultra**: A KernelSU fork providing a root solution for Android GKI devices; it works in kernel mode and grants root permission to userspace applications directly in kernel space. This project uses the `susfs_new` branch, which integrates SUSFS support directly into the root solution.
-- **SUSFS**: Root hiding kernel patches, now integrated via SukiSU-Ultra (`susfs_new`) instead of standalone susfs4ksu + KernelSU.
+- **SukiSU-Ultra**: A KernelSU fork providing a root solution for Android GKI and Sultan devices; it works in kernel mode and grants root permission to userspace applications directly in kernel space. This project uses the `susfs_new` branch, which integrates SUSFS support directly into the root solution.
+- **SUSFS v2.1.0**: Root hiding kernel patches, now integrated via SukiSU-Ultra (`susfs_new`) instead of standalone susfs4ksu + KernelSU.
+- **Build variants** (per device workflow): `stock` (unmodified base kernel), `wksu` (KernelSU only), and `wksu-susfs` (KernelSU + SUSFS plus Mountify support, BBR TCP congestion control, IPSet, and extra networking tweaks).
 
 ---
 
@@ -52,8 +53,9 @@ To get boot.img format:
 
 - **KernelSU**: Developed by [tiann](https://github.com/tiann/KernelSU).
 - **SukiSU-Ultra**: Developed by [SukiSU-Ultra](https://github.com/SukiSU-Ultra) (branch: [susfs_new](https://github.com/SukiSU-Ultra/SukiSU_Ultra/tree/susfs_new)).
-- **SUSFS**: Originally developed by [simonpunk](https://gitlab.com/simonpunk/susfs4ksu.git); now maintained as part of SukiSU-Ultra.
+- **SUSFS**: Originally developed by [simonpunk](https://gitlab.com/simonpunk/susfs4ksu); now maintained as part of SukiSU-Ultra.
 - **SUSFS Module**: Developed by [the-susfs-team](https://github.com/the-susfs-team).
+- **Mountify module support**: [sidex15](https://github.com/sidex15).
 - **Sultan Kernels**: Developed by [kerneltoast](https://github.com/kerneltoast).
 
 Special thanks to the open-source community for their contributions!
@@ -75,12 +77,4 @@ Flashing this kernel will void your warranty, and there is always a risk of bric
 ---
 
 [Telegram](https://t.me/TheWildJames)  
-[Telegram Group](https://t.me/WildKernelsTG)  
-
-# Special thanks to the following people for their contributions!
-This helps me alot! <3
-
-[simonpunk](https://gitlab.com/simonpunk/susfs4ksu.git) - Created SUSFS!  
-[sidex15](https://github.com/sidex15) - Created module!
-
-If you have contributed and are not here please remind me!
+[Telegram Group](https://t.me/WildKernelsTG)
