@@ -154,47 +154,13 @@ jobs:
           # temporarily normalize fs/open.c, apply the patch, then restore it.
           perl -0pi -e 's/if \(IS_ERR\(f\) && !libperfmgr_redirect\(&f, dfd, tmp, &op, how\)\) \{/if (IS_ERR(f)) {/g' fs/open.c
 
-          # ---- PATCH VALIDATION & AUTO-FIX ----
-          # The SUSFS patch from susfs_new branch sometimes has malformed hunk headers
-          # (e.g., "@@ -1919,6 +1933,10 @@" with mismatched line counts).
-          # This step validates and attempts to fix common issues before applying.
-          PATCH_FILE="$SUSFS_PATCH_DIR/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch"
-
-          if [[ ! -f "$PATCH_FILE" ]]; then
-            echo "::error::Patch file not found: $PATCH_FILE"
-            echo "Available patches:"
-            ls -la "$SUSFS_PATCH_DIR/kernel_patches/" || true
-            exit 1
-          fi
-
-          echo "Validating patch file: $PATCH_FILE"
-          # Check for malformed hunk headers (missing space after @@, wrong format)
-          if ! grep -q '^@@ .* @@$' "$PATCH_FILE"; then
-            echo "::warning::Patch file may have malformed hunk headers, attempting auto-fix..."
-            # Create a fixed copy
-            FIXED_PATCH="${PATCH_FILE}.fixed"
-            # Fix common issues: ensure space after @@ and before @@
-            sed -E 's/^@@([^-+ ])/@@ \1/; s/([^-+ ])@@$/\1 @@/' "$PATCH_FILE" > "$FIXED_PATCH"
-            # Validate hunk header format: @@ -old_start,old_count +new_start,new_count @@
-            # If still invalid, show the problematic lines
-            if ! grep -q '^@@ .* @@$' "$FIXED_PATCH"; then
-              echo "::error::Patch file has unfixable malformed hunk headers:"
-              grep -n '^@@' "$PATCH_FILE" | head -20
-              exit 1
-            fi
-            PATCH_FILE="$FIXED_PATCH"
-            echo "Using fixed patch: $PATCH_FILE"
-          fi
-
           # Apply SUSFS patch. Do NOT swallow failures with "|| true": a failed
           # patch leaves .rej files and produces a silently broken kernel.
-          patch -p1 --no-backup-if-mismatch < "$PATCH_FILE"
+          patch -p1 --no-backup-if-mismatch < "$SUSFS_PATCH_DIR/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch"
 
           # Verify the patch actually landed before continuing
           if find . -name '*.rej' -print -quit | grep -q .; then
             echo "::error::SUSFS patch produced .rej files; aborting build."
-            echo "Rejected hunks:"
-            find . -name '*.rej' -exec echo "=== {} ===" \; -exec cat {} \;
             exit 1
           fi
 
@@ -202,25 +168,6 @@ jobs:
 
           # kernel/sys.c now ships with SukiSU-Ultra (susfs_new) hooks already applied;
           # legacy sys.c_fix.patch is obsolete and no longer applied.
-
-      - name: Configure SukiSU-Ultra
-        if: contains(matrix.features, 'wksu')
-        run: |
-          cd "$CONFIG"
-          # KernelSU Configuration
-          echo "# KernelSU Configuration" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          echo "CONFIG_KSU=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          if [[ "${{ matrix.features }}" == *"susfs"* ]]; then
-            echo "CONFIG_KSU_SUSFS=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-            # Enable the uname spoofing hooks shipped in kernel/sys.c; without this
-            # the CONFIG_KSU_SUSFS_SPOOF_UNAME-guarded code compiles out and
-            # spoof_uname from SUSFS has no effect.
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-          else
-            echo "CONFIG_KSU_MANUAL_HOOKS=y" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-            echo "CONFIG_KSU_SUSFS=n" >> ./arch/arm64/configs/${{ inputs.codename }}_defconfig
-            patch -p1 < ../kernel_patches/wild/hooks/69_pure_manual_hooks_only.patch
-          fi
 
       - name: Configure Mountify Support
         if: matrix.features == 'wksu-susfs'
