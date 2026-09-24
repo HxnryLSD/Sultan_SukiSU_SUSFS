@@ -46,7 +46,7 @@ jobs:
         -> https://github.com/TheWildJames/android_kernel_google_tensynos/commit/TENSYNOS_HASH
         
         Root Solution:
-        -> https://github.com/SukiSU-Ultra/SukiSU_Ultra/tree/susfs_new
+        -> https://github.com/SukiSU-Ultra/SukiSU-Ultra/tree/susfs_new
         
         Manager:
         -> https://github.com/SukiSU-Ultra/SukiSU_Manager

@@ -71,7 +71,7 @@ jobs:
 
       # Performance: single shallow checkout step for all repos. The previous
       # setup cloned the kernel twice (once full-history, once depth=1), and
-      # did a full clone of SukiSU_Ultra (~350 MB history) whose setup.sh only
+      # did a full clone of SukiSU-Ultra (~350 MB history) whose setup.sh only
       # needs the tip of susfs_new. Shallow clones cut several minutes of
       # network + disk I/O per matrix job.
       - name: Clone AnyKernel3 and Other Dependencies
@@ -86,20 +86,42 @@ jobs:
           echo "Using branch for AnyKernel3: $ANYKERNEL_BRANCH"
 
           # All clones run in parallel; each is shallow since only the tip is used.
+          # GIT_TERMINAL_PROMPT=0 makes git fail fast instead of hanging on an
+          # interactive "Username for 'https://github.com'" prompt when a repo is
+          # private/misnamed or GitHub rate-limits us (the cause of the exit 128).
+          export GIT_TERMINAL_PROMPT=0
+
+          # The kernel repo name depends on codename (e.g. gs201 -> tensynos,
+          # zuma -> android_kernel_google_zuma). Derive it from the input so we
+          # never clone a non-existent repo like "..._tensynos" for zuma builds.
+          case "${{ inputs.codename }}" in
+            gs201|gs201*) KERNEL_REPO="android_kernel_google_tensynos" ;;
+            *)            KERNEL_REPO="android_kernel_google_${{ inputs.codename }}" ;;
+          esac
+          echo "Using kernel repo: $KERNEL_REPO"
+
           git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH" &
           pid_ak3=$!
           git clone --depth=1 https://github.com/TheWildJames/kernel_patches.git &
           pid_kp=$!
-          git clone --depth=1 https://github.com/TheWildJames/android_kernel_google_tensynos &
+          git clone --depth=1 "https://github.com/TheWildJames/$KERNEL_REPO" &
           pid_kern=$!
           # SUSFS is integrated into SukiSU-Ultra (branch: susfs_new) - no separate susfs4ksu repo needed
-          git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU_Ultra.git -b susfs_new &
+          git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU-Ultra.git -b susfs_new &
           pid_sukisu=$!
 
-          wait $pid_ak3
-          wait $pid_kp
-          wait $pid_kern
-          wait $pid_sukisu
+          # Collect every clone's exit status so one failure doesn't mask others
+          rc=0
+          wait $pid_ak3    || { echo "::error::AnyKernel3 clone failed";    rc=1; }
+          wait $pid_kp     || { echo "::error::kernel_patches clone failed"; rc=1; }
+          wait $pid_kern   || { echo "::error::$KERNEL_REPO clone failed";   rc=1; }
+          wait $pid_sukisu || { echo "::error::SukiSU_Ultra clone failed";   rc=1; }
+
+          if [ $rc -ne 0 ]; then
+            echo "One or more clones failed (exit 128 usually means a private/nonexistent"
+            echo "repo, a wrong branch name, or GitHub rate-limiting anonymous access)."
+            exit $rc
+          fi
 
       - name: Add SukiSU-Ultra
         if: contains(matrix.features, 'wksu')
@@ -109,7 +131,7 @@ jobs:
 
           echo "Adding SukiSU-Ultra (susfs_new)..."
           # SukiSU-Ultra setup.sh on branch susfs_new integrates KernelSU + SUSFS support
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU_Ultra/susfs_new/kernel/setup.sh" | bash -s susfs_new
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/susfs_new/kernel/setup.sh" | bash -s susfs_new
 
       - name: Apply SUSFS Patches
         if: contains(matrix.features, 'susfs')
@@ -120,7 +142,7 @@ jobs:
           cd "$CONFIG"
 
           # SUSFS kernel patches ship inside the SukiSU-Ultra susfs_new branch tree
-          SUSFS_PATCH_DIR="../SukiSU_Ultra"
+          SUSFS_PATCH_DIR="../SukiSU-Ultra"
 
           echo "Applying SUSFS v${SUSFS_VERSION} patches from SukiSU-Ultra ($SUSFS_PATCH_DIR)..."
 
