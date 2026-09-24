@@ -656,7 +656,7 @@ SYSCALL_DEFINE1(setuid, uid_t, uid)
 }
 
 #ifdef CONFIG_KSU_SUSFS
-extern int ksu_handle_setresuid(uid_t ruid, uid_t euid, uid_t suid);
+extern void ksu_handle_setresuid(uid_t *ruid, uid_t *euid, uid_t *suid);
 #endif
 
 /*
@@ -675,20 +675,10 @@ long __sys_setresuid(uid_t ruid, uid_t euid, uid_t suid)
 #ifdef CONFIG_KSU_SUSFS
 	/*
 	 * Let KernelSU/SUSFS potentially override the requested ids (e.g. to
-	 * spoof a root transition as unprivileged). Without consuming the
-	 * return value here, an override would be silently ignored.
+	 * spoof a root transition as unprivileged). The hook modifies the
+	 * arguments in place via pointers, so pass their addresses.
 	 */
-	{
-		int susfs_ret = ksu_handle_setresuid(ruid, euid, suid);
-
-		if (susfs_ret == 1) {
-			ruid = current_cred()->uid;
-			euid = current_cred()->euid;
-			suid = current_cred()->suid;
-		} else if (susfs_ret < 0 && susfs_ret != -EINVAL) {
-			return susfs_ret;
-		}
-	}
+	ksu_handle_setresuid(&ruid, &euid, &suid);
 #endif
 
 	kruid = make_kuid(ns, ruid);
@@ -1322,7 +1312,7 @@ static int override_release(char __user *release, size_t len)
 }
 
 #ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
-extern struct static_key_false susfs_is_uname_spoof_buffer_set;
+extern struct jump_label_key susfs_is_uname_spoof_buffer_set;
 extern void susfs_spoof_uname(struct new_utsname *tmp);
 #endif /* CONFIG_KSU_SUSFS_SPOOF_UNAME */
 
@@ -2434,8 +2424,10 @@ static int prctl_set_vma(unsigned long opt, unsigned long addr,
 
 		trace_android_rvh_pr_set_vma_name_bypass(mm, addr, size, anon_name,
 			      &error, &bypass);
-		if (bypass)
+		if (bypass) {
+			anon_vma_name_put(anon_name);
 			return error;
+		}
 		mmap_write_lock(mm);
 		error = madvise_set_anon_name(mm, addr, size, anon_name);
 		mmap_write_unlock(mm);
@@ -2559,8 +2551,6 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 			error = current->timer_slack_ns;
 		break;
 	case PR_SET_TIMERSLACK:
-		if (task_is_realtime(current))
-			break;
 		if (arg2 <= 0)
 			current->timer_slack_ns =
 					current->default_timer_slack_ns;
