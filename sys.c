@@ -1378,19 +1378,17 @@ SYSCALL_DEFINE1(uname, struct old_utsname __user *, name)
 	if (!name)
 		return -EFAULT;
 
-#ifdef CONFIG_KSU_SUSFS_SPOOF_UNAME
-	if (static_branch_likely(&susfs_is_uname_spoof_buffer_set)) {
+	{
 		struct new_utsname uts;
 
+		/*
+		 * susfs_fill_spoofed_utsname() already handles the unspoofed
+		 * case internally (the static branch is checked inside it), so
+		 * no separate non-SUSFS fallback path is needed here.
+		 * old_utsname is a truncated prefix layout of new_utsname.
+		 */
 		susfs_fill_spoofed_utsname(&uts);
-		/* old_utsname is a truncated prefix layout of new_utsname */
 		memcpy(&tmp, &uts, sizeof(struct old_utsname));
-	} else
-#endif
-	{
-		down_read(&uts_sem);
-		memcpy(&tmp, utsname(), sizeof(tmp));
-		up_read(&uts_sem);
 	}
 	if (copy_to_user(name, &tmp, sizeof(tmp)))
 		return -EFAULT;
