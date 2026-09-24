@@ -59,9 +59,13 @@ jobs:
         [+] IPSet Support
 
     steps:
-      # Checkout the code
+      # Performance: this job only needs the tag list, release notes and the
+      # built artifacts — not the kernel sources. Skipping the history fetch
+      # keeps `git ls-remote`/tag creation fast (default is a full clone).
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       # Get the Latest Tag from GitHub
       - name: Generate and Create New Tag

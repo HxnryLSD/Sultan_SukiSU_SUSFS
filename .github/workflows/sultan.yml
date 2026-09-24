@@ -40,12 +40,15 @@ jobs:
       #    remove-cached-tools: 'false'   # Avoid unless confirmed safe
       #    verbose: 'true'                # Enable detailed logging
 
+      # Performance: install the toolchain via a post-extraction cache key so
+      # every job after the first restores the ready-to-use directory straight
+      # from cache (no download + no multi-hundred-MB untar per job).
       - name: Cache GCC 14.2.0 toolchain
         id: gcc-cache
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/gcc-14.2.0-nolibc
-          key: gcc-14.2.0-nolibc-aarch64-linux
+          key: gcc-14.2.0-nolibc-aarch64-linux-v2
 
       - name: Download and extract GCC 14.2.0 toolchain
         if: steps.gcc-cache.outputs.cache-hit != 'true'
@@ -54,6 +57,7 @@ jobs:
           wget -q https://www.kernel.org/pub/tools/crosstool/files/bin/x86_64/14.2.0/x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.xz
           echo "Extracting toolchain into workspace..."
           tar -xf x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.xz -C "$GITHUB_WORKSPACE"
+          rm -f x86_64-gcc-14.2.0-nolibc-aarch64-linux.tar.xz
           echo "GCC 14.2.0 toolchain extracted successfully"
 
       - name: Set CONFIG Environment Variable
@@ -65,8 +69,15 @@ jobs:
 
           echo "CONFIG set to: $CONFIG"
 
+      # Performance: single shallow checkout step for all repos. The previous
+      # setup cloned the kernel twice (once full-history, once depth=1), and
+      # did a full clone of SukiSU_Ultra (~350 MB history) whose setup.sh only
+      # needs the tip of susfs_new. Shallow clones cut several minutes of
+      # network + disk I/O per matrix job.
       - name: Clone AnyKernel3 and Other Dependencies
+        shell: bash
         run: |
+          set -euo pipefail
           echo "Cloning AnyKernel3 and other dependencies..."
 
           ANYKERNEL_BRANCH="sultan-${{ inputs.codename }}"
@@ -74,12 +85,21 @@ jobs:
           # Debug print the branches
           echo "Using branch for AnyKernel3: $ANYKERNEL_BRANCH"
 
-          # Clone repositories using the branch names
-          git clone https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH"
-          git clone https://github.com/TheWildJames/kernel_patches.git
-          git clone https://github.com/TheWildJames/android_kernel_google_tensynos --depth=1
+          # All clones run in parallel; each is shallow since only the tip is used.
+          git clone --depth=1 https://github.com/TheWildJames/AnyKernel3.git -b "$ANYKERNEL_BRANCH" &
+          pid_ak3=$!
+          git clone --depth=1 https://github.com/TheWildJames/kernel_patches.git &
+          pid_kp=$!
+          git clone --depth=1 https://github.com/TheWildJames/android_kernel_google_tensynos &
+          pid_kern=$!
           # SUSFS is integrated into SukiSU-Ultra (branch: susfs_new) - no separate susfs4ksu repo needed
-          git clone https://github.com/SukiSU-Ultra/SukiSU_Ultra.git -b susfs_new
+          git clone --depth=1 https://github.com/SukiSU-Ultra/SukiSU_Ultra.git -b susfs_new &
+          pid_sukisu=$!
+
+          wait $pid_ak3
+          wait $pid_kp
+          wait $pid_kern
+          wait $pid_sukisu
 
       - name: Add SukiSU-Ultra
         if: contains(matrix.features, 'wksu')
@@ -222,13 +242,48 @@ jobs:
           sed -i '/echo "+"$/d' scripts/setlocalversion
 
 
+      # Performance: ccache keeps compiled objects for the kernel sources that
+      # are identical across the three matrix variants (stock/wksu/wksu-susfs
+      # differ only in a handful of files), turning the 2nd and 3rd builds in
+      # each run into mostly cache hits. Restored from cache between runs as
+      # well, so re-runs / follow-up releases get faster still.
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-${{ inputs.codename }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ matrix.features }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ inputs.codename }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ matrix.features }}-
+            ccache-${{ inputs.codename }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-
+
       - name: Build the Kernel
+        shell: bash
         run: |
+          set -euo pipefail
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc -j$(nproc --all) ${{ inputs.codename }}_defconfig
-          make CROSS_COMPILE=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux- CC=$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin/aarch64-linux-gcc LOCALVERSION_AUTO=0 -j$(nproc --all)
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache"
+          mkdir -p "$CCACHE_DIR"
+          # 15 GB is plenty for one kernel tree; max_size avoids eviction churn.
+          ccache --max-size=15G >/dev/null
+
+          TOOLCHAIN="$GITHUB_WORKSPACE/gcc-14.2.0-nolibc/aarch64-linux/bin"
+
+          make CROSS_COMPILE=$TOOLCHAIN/aarch64-linux- CC="ccache $TOOLCHAIN/aarch64-linux-gcc" -j$(nproc --all) ${{ inputs.codename }}_defconfig
+          make CROSS_COMPILE=$TOOLCHAIN/aarch64-linux- CC="ccache $TOOLCHAIN/aarch64-linux-gcc" LOCALVERSION_AUTO=0 -j$(nproc --all)
+
+          # Show hit rate so cache effectiveness can be tracked in the logs.
+          ccache --show-stats
+
+      - name: Save ccache
+        # Only save on success: a failed/cancelled build leaves a partial or
+        # inconsistent cache behind.
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: ccache-${{ inputs.codename }}-${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ matrix.features }}-${{ github.sha }}
 
       - name: Copy Images
         run: |
@@ -256,9 +311,11 @@ jobs:
           ANDROID_MAJOR="a$(echo "${{ inputs.android_version }}" | sed 's/^android//')"
 
           # Zip the files in the AnyKernel3 directory with a new naming convention
+          # (-9 = max compression; these zips are downloaded by every user, so
+          # trading ~free CPU time for smaller upload/download size is a win)
           ZIP_NAME="${{ inputs.codename }}-${ANDROID_MAJOR}-${{ matrix.features }}-anykernel3.zip"
           echo "Creating zip file $ZIP_NAME..."
-          zip -r "../$ZIP_NAME" ./*
+          zip -9 -r "../$ZIP_NAME" ./*
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
